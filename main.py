@@ -17,7 +17,7 @@ from functools import lru_cache
 from typing_extensions import Annotated
 from core import config
 from contextlib import asynccontextmanager
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, Optional
 from typing import Dict, List, Any
 import hashlib
 
@@ -164,48 +164,6 @@ def compute_string_properties(value: str) -> dict:
         "character_frequency_map": char_freq
     }
 
-#
-# @limiter.limit("8/minute")
-# @app.post("/strings")
-# async def analyze_string(request: Request, body: Value):
-#     provided_string = body.value
-#
-#     for string in range(len(StringDB)):
-#         index_item = StringDB[string]
-#         if index_item['value'] == provided_string:
-#             raise ConflictException("String already exists in the system")
-#
-#     hashed_string = get_string_hash(provided_string)
-#     no_space_string = provided_string.replace(" ", "")
-#     provided_string_char_collection: list[Any] = []
-#     for char in no_space_string:
-#         provided_string_char_collection.append(char)
-#
-#     char_freq: dict[str, int] = {}
-#     for letter in provided_string_char_collection:
-#         duplicate_count = provided_string_char_collection.count(letter)
-#         char_freq[letter] = duplicate_count
-#
-#     # reversed_char_string = reversed_string(provided_string)
-#     # palindrome = reversed_char_string == provided_string
-#
-#     palindrome = provided_string.lower().replace(" ", "") == reversed_string(provided_string.lower().replace(" ", ""))
-#
-#     data = {
-#         "id": hashed_string,
-#         "value": provided_string,
-#         "properties": {
-#             "length": len(provided_string_char_collection),
-#             "is_palindrome": palindrome,
-#             "unique_characters": len(set(provided_string_char_collection)),
-#             "word_count": len(provided_string.split()),
-#             "sha256_hash": hashed_string,
-#             "character_frequency_map": char_freq,
-#         },
-#         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-#     }
-#     StringDB.append(data)
-#     return JSONResponse(content=data, status_code=201, media_type="application/json")
 
 @limiter.limit("8/minute")
 @app.post("/strings")
@@ -265,49 +223,51 @@ async def fetch_string(request: Request, string_value: str):
 from fastapi import Query
 
 @limiter.limit("8/minute")
+
 @app.get("/strings")
-async def filter_string(
-    request: Request,
-    is_palindrome: bool = Query(..., description="is_palindrome (true/false)"),
-    min_length: int = Query(..., description="Minimum string length (inclusive)"),
-    max_length: int = Query(..., description="Maximum string length (inclusive)"),
-    word_count: int = Query(..., description="Exact word count"),
-    contains_character: str = Query(..., min_length=1, description="A single character to search for"),
+async def filter_strings(
+    is_palindrome: Optional[bool] = Query(None, description="Optional palindrome filter"),
+    min_length: Optional[int] = Query(None, description="Minimum string length"),
+    max_length: Optional[int] = Query(None, description="Maximum string length"),
+    word_count: Optional[int] = Query(None, description="Exact word count"),
+    contains_character: Optional[str] = Query(None, description="Character to search for")
 ):
-    # Validate contains_character length
-    if len(contains_character) != 1:
-        raise BadRequestException("contains_character must be a single character.")
-
-    # Normalize search char for case-insensitive check
-    search_char = contains_character.lower()
-
-    # Validate min/max semantics
-    if min_length < 0 or max_length < 0:
-        raise BadRequestException("min_length and max_length must be non-negative integers.")
-    if min_length > max_length:
-        raise BadRequestException("min_length cannot be greater than max_length.")
+    if not any([is_palindrome, min_length, max_length, word_count, contains_character]):
+        raise BadRequestException("At least one filter must be provided.")
 
     filtered = []
+
     for item in StringDB:
-        props = item["properties"]
+        value = item.get("value", "")
+        props = item.get("properties", {})
+        length = len(value)
+        wc = len(value.split())
+        palindrome_check = value.lower() == value.lower()[::-1]
 
-        # inclusive length check
-        length_ok = (min_length <= props["length"] <= max_length)
-        if props["is_palindrome"] != is_palindrome or not length_ok:
-            continue
+        match = True
 
-        # exact word count
-        if props["word_count"] != word_count:
-            continue
+        if is_palindrome is not None and palindrome_check != is_palindrome:
+            match = False
 
-        # contains_character case-insensitive
-        if search_char not in item["value"].lower():
-            continue
+        if min_length is not None and length < min_length:
+            match = False
 
-        filtered.append(item)
+        if max_length is not None and length > max_length:
+            match = False
 
-    # return consistent response shape even when empty
-    response = {
+        if word_count is not None and wc != word_count:
+            match = False
+
+        if contains_character is not None and contains_character.lower() not in value.lower():
+            match = False
+
+        if match:
+            filtered.append(item)
+
+    if not filtered:
+        raise BadRequestException("No string matches the given filters.")
+
+    data = {
         "data": filtered,
         "count": len(filtered),
         "filters_applied": {
@@ -318,8 +278,8 @@ async def filter_string(
             "contains_character": contains_character
         }
     }
-    return JSONResponse(content=response, status_code=200, media_type="application/json")
 
+    return JSONResponse(status_code=200, content=data)
 
 
 @app.delete("/strings/{string_value}")
@@ -339,114 +299,28 @@ async def delete_string(request: Request, string_value: str):
 
     return Response(status_code=204)
 
-# @limiter.limit("8/minute")
-# @app.get("/strings/filter-by-natural-language")
-# async def filter_by_natural_language(
-#     request: Request,
-#     query: str = Query(..., description="A natural language filter query")
-# ):
-#     q = query.lower().strip()
-#     parsed = {}
-#
-#     if "palindrom" in q:
-#         parsed["is_palindrome"] = True
-#
-#     if "single word" in q or "one word" in q or "single-word" in q:
-#         parsed["word_count"] = 1
-#
-#     if "longer than" in q:
-#         try:
-#             tail = q.split("longer than", 1)[1]
-#             num = int("".join(ch for ch in tail if ch.isdigit()))
-#             parsed["min_length"] = num + 1
-#         except Exception:
-#             raise BadRequestException("Unable to parse numeric length from query.")
-#
-#     if "containing the letter" in q:
-#         try:
-#             tail = q.split("containing the letter", 1)[1].strip()
-#             if not tail:
-#                 raise ValueError
-#             parsed["contains_character"] = tail[0]
-#         except Exception:
-#             raise BadRequestException("Unable to parse letter from query.")
-#
-#
-#     if "containing " in q and "containing the letter" not in q:
-#         # crude attempt to get single char after 'containing '
-#         try:
-#             tail = q.split("containing", 1)[1].strip()
-#             # pick first token's first char
-#             parsed["contains_character"] = tail.split()[0][0]
-#         except Exception:
-#             pass
-#
-#     if not parsed:
-#         raise BadRequestException("Unable to parse natural language query")
-#
-#     filtered = []
-#     for item in StringDB:
-#         props = item["properties"]
-#
-#         if "is_palindrome" in parsed and props["is_palindrome"] != parsed["is_palindrome"]:
-#             continue
-#         if "word_count" in parsed and props["word_count"] != parsed["word_count"]:
-#             continue
-#         if "min_length" in parsed and props["length"] < parsed["min_length"]:
-#             continue
-#         if "contains_character" in parsed and parsed["contains_character"].lower() not in item["value"].lower():
-#             continue
-#
-#         filtered.append(item)
-#
-#     if not filtered:
-#         raise NotFoundException("No String matches this queries in the system.")
-#
-#     response = {
-#         "data": filtered,
-#         "count": len(filtered),
-#         "interpreted_query": {
-#             "original": query,
-#             "parsed_filters": parsed
-#         }
-#     }
-#     return JSONResponse(content=response, status_code=200, media_type="application/json")
 
-
-
-def parse_natural_language_query(query_string: str) -> Dict[str, Any]:
-
+def parse_natural_language_query(query: str) -> Dict[str, Any]:
     filters = {}
-    query_lower = query_string.lower()
+    query_lower = query.lower()
 
-    # Check for palindrome
-    if 'palindrome' in query_lower or 'palindromic' in query_lower:
-        filters['is_palindrome'] = True
+    if "palindrome" in query_lower or "palindromic" in query_lower:
+        filters["is_palindrome"] = True
 
-    # Check for single word
-    if 'single word' in query_lower:
-        filters['word_count'] = 1
+    if "single word" in query_lower:
+        filters["word_count"] = 1
 
-    # Check for "longer than X characters"
-    longer_match = re.search(r'longer than (\d+)', query_lower)
+    longer_match = re.search(r"longer than (\d+)", query_lower)
     if longer_match:
-        x = int(longer_match.group(1))
-        filters['min_length'] = x + 1
+        filters["min_length"] = int(longer_match.group(1)) + 1
 
-    # Check for "shorter than X"
-    shorter_match = re.search(r'shorter than (\d+)', query_lower)
+    shorter_match = re.search(r"shorter than (\d+)", query_lower)
     if shorter_match:
-        x = int(shorter_match.group(1))
-        filters['max_length'] = x - 1
+        filters["max_length"] = int(shorter_match.group(1)) - 1
 
-    # Check for "contains letter X" or "containing X"
-    contains_match = re.search(r'contain(?:s|ing)\s+(?:letter\s+)?([a-z])', query_lower)
+    contains_match = re.search(r"contain(?:s|ing)\s+(?:letter\s+)?([a-z])", query_lower)
     if contains_match:
-        filters['contains_character'] = contains_match.group(1)
-
-    # Check for "first vowel"
-    if 'first vowel' in query_lower:
-        filters['contains_character'] = 'a'
+        filters["contains_character"] = contains_match.group(1)
 
     return filters
 
@@ -454,58 +328,50 @@ def parse_natural_language_query(query_string: str) -> Dict[str, Any]:
 @limiter.limit("12/minute")
 @app.get("/strings/filter-by-natural-language")
 def filter_by_natural_language(request: Request, query: str = Query(..., description="Natural language filter query")):
-
     if not query:
         raise BadRequestException("The 'query' parameter is required.")
 
-    try:
-        parsed_filters = parse_natural_language_query(query)
-    except Exception as e:
-        raise BadRequestException(f"Unable to parse query: {str(e)}")
+    filters = parse_natural_language_query(query)
 
-    # Check for conflicting filters
-    if 'min_length' in parsed_filters and 'max_length' in parsed_filters:
-        if parsed_filters['min_length'] > parsed_filters['max_length']:
-            raise BadRequestException("min_length cannot be greater than max_length.")
-
-    # Apply filters to StringDB
-    filtered_results = []
-
+    # Apply parsed filters
+    filtered = []
     for item in StringDB:
         value = item.get("value", "")
-        props = item.get("properties", {})
         length = len(value)
-        word_count = len(value.split())
-        is_palindrome = value.lower() == value.lower()[::-1]
+        wc = len(value.split())
+        palindrome_check = value.lower() == value.lower()[::-1]
 
         match = True
 
-        # Apply filters
-        if 'is_palindrome' in parsed_filters and parsed_filters['is_palindrome'] != is_palindrome:
+        if "is_palindrome" in filters and filters["is_palindrome"] != palindrome_check:
             match = False
 
-        if 'min_length' in parsed_filters and length < parsed_filters['min_length']:
+        if "min_length" in filters and length < filters["min_length"]:
             match = False
 
-        if 'max_length' in parsed_filters and length > parsed_filters['max_length']:
+        if "max_length" in filters and length > filters["max_length"]:
             match = False
 
-        if 'word_count' in parsed_filters and word_count != parsed_filters['word_count']:
+        if "word_count" in filters and wc != filters["word_count"]:
             match = False
 
-        if 'contains_character' in parsed_filters and parsed_filters['contains_character'] not in value.lower():
+        if "contains_character" in filters and filters["contains_character"] not in value.lower():
             match = False
 
         if match:
-            filtered_results.append(item)
+            filtered.append(item)
 
-    response = {
-        "data": filtered_results,
-        "count": len(filtered_results),
-        "interpreted_query": {
-            "original_query": query,
-            "parsed_filters": parsed_filters
+    if not filtered:
+        raise NotFoundException("No strings match the given natural language query.")
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "data": filtered,
+            "count": len(filtered),
+            "interpreted_query": {
+                "original_query": query,
+                "parsed_filters": filters
+            }
         }
-    }
-
-    return JSONResponse(status_code=200, content=response)
+    )
