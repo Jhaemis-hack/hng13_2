@@ -339,76 +339,178 @@ async def delete_string(request: Request, string_value: str):
 
     return Response(status_code=204)
 
+# @limiter.limit("8/minute")
+# @app.get("/strings/filter-by-natural-language")
+# async def filter_by_natural_language(
+#     request: Request,
+#     query: str = Query(..., description="A natural language filter query")
+# ):
+#     q = query.lower().strip()
+#     parsed = {}
+#
+#     if "palindrom" in q:
+#         parsed["is_palindrome"] = True
+#
+#     if "single word" in q or "one word" in q or "single-word" in q:
+#         parsed["word_count"] = 1
+#
+#     if "longer than" in q:
+#         try:
+#             tail = q.split("longer than", 1)[1]
+#             num = int("".join(ch for ch in tail if ch.isdigit()))
+#             parsed["min_length"] = num + 1
+#         except Exception:
+#             raise BadRequestException("Unable to parse numeric length from query.")
+#
+#     if "containing the letter" in q:
+#         try:
+#             tail = q.split("containing the letter", 1)[1].strip()
+#             if not tail:
+#                 raise ValueError
+#             parsed["contains_character"] = tail[0]
+#         except Exception:
+#             raise BadRequestException("Unable to parse letter from query.")
+#
+#
+#     if "containing " in q and "containing the letter" not in q:
+#         # crude attempt to get single char after 'containing '
+#         try:
+#             tail = q.split("containing", 1)[1].strip()
+#             # pick first token's first char
+#             parsed["contains_character"] = tail.split()[0][0]
+#         except Exception:
+#             pass
+#
+#     if not parsed:
+#         raise BadRequestException("Unable to parse natural language query")
+#
+#     filtered = []
+#     for item in StringDB:
+#         props = item["properties"]
+#
+#         if "is_palindrome" in parsed and props["is_palindrome"] != parsed["is_palindrome"]:
+#             continue
+#         if "word_count" in parsed and props["word_count"] != parsed["word_count"]:
+#             continue
+#         if "min_length" in parsed and props["length"] < parsed["min_length"]:
+#             continue
+#         if "contains_character" in parsed and parsed["contains_character"].lower() not in item["value"].lower():
+#             continue
+#
+#         filtered.append(item)
+#
+#     if not filtered:
+#         raise NotFoundException("No String matches this queries in the system.")
+#
+#     response = {
+#         "data": filtered,
+#         "count": len(filtered),
+#         "interpreted_query": {
+#             "original": query,
+#             "parsed_filters": parsed
+#         }
+#     }
+#     return JSONResponse(content=response, status_code=200, media_type="application/json")
+
+
+
+def parse_natural_language_query(query_string: str) -> Dict[str, Any]:
+
+    filters = {}
+    query_lower = query_string.lower()
+
+    # Check for palindrome
+    if 'palindrome' in query_lower or 'palindromic' in query_lower:
+        filters['is_palindrome'] = True
+
+    # Check for single word
+    if 'single word' in query_lower:
+        filters['word_count'] = 1
+
+    # Check for "longer than X characters"
+    longer_match = re.search(r'longer than (\d+)', query_lower)
+    if longer_match:
+        x = int(longer_match.group(1))
+        filters['min_length'] = x + 1
+
+    # Check for "shorter than X"
+    shorter_match = re.search(r'shorter than (\d+)', query_lower)
+    if shorter_match:
+        x = int(shorter_match.group(1))
+        filters['max_length'] = x - 1
+
+    # Check for "contains letter X" or "containing X"
+    contains_match = re.search(r'contain(?:s|ing)\s+(?:letter\s+)?([a-z])', query_lower)
+    if contains_match:
+        filters['contains_character'] = contains_match.group(1)
+
+    # Check for "first vowel"
+    if 'first vowel' in query_lower:
+        filters['contains_character'] = 'a'
+
+    return filters
+
+
 @limiter.limit("8/minute")
 @app.get("/strings/filter-by-natural-language")
-async def filter_by_natural_language(
-    request: Request,
-    query: str = Query(..., description="A natural language filter query")
-):
-    q = query.lower().strip()
-    parsed = {}
+def filter_by_natural_language(query: str = Query(..., description="Natural language filter query")):
+    """
+    GET /strings/filter-by-natural-language
 
-    if "palindrom" in q:
-        parsed["is_palindrome"] = True
+    Parses a natural language query (e.g., "all single word palindromic strings")
+    into filters, applies them to StringDB, and returns matching results.
+    """
+    if not query:
+        raise BadRequestException("The 'query' parameter is required.")
 
-    if "single word" in q or "one word" in q or "single-word" in q:
-        parsed["word_count"] = 1
+    try:
+        parsed_filters = parse_natural_language_query(query)
+    except Exception as e:
+        raise BadRequestException(f"Unable to parse query: {str(e)}")
 
-    if "longer than" in q:
-        try:
-            tail = q.split("longer than", 1)[1]
-            num = int("".join(ch for ch in tail if ch.isdigit()))
-            parsed["min_length"] = num + 1
-        except Exception:
-            raise BadRequestException("Unable to parse numeric length from query.")
+    # Check for conflicting filters
+    if 'min_length' in parsed_filters and 'max_length' in parsed_filters:
+        if parsed_filters['min_length'] > parsed_filters['max_length']:
+            raise BadRequestException("min_length cannot be greater than max_length.")
 
-    if "containing the letter" in q:
-        try:
-            tail = q.split("containing the letter", 1)[1].strip()
-            if not tail:
-                raise ValueError
-            parsed["contains_character"] = tail[0]
-        except Exception:
-            raise BadRequestException("Unable to parse letter from query.")
+    # Apply filters to StringDB
+    filtered_results = []
 
-
-    if "containing " in q and "containing the letter" not in q:
-        # crude attempt to get single char after 'containing '
-        try:
-            tail = q.split("containing", 1)[1].strip()
-            # pick first token's first char
-            parsed["contains_character"] = tail.split()[0][0]
-        except Exception:
-            pass
-
-    if not parsed:
-        raise BadRequestException("Unable to parse natural language query")
-
-    filtered = []
     for item in StringDB:
-        props = item["properties"]
+        value = item.get("value", "")
+        props = item.get("properties", {})
+        length = len(value)
+        word_count = len(value.split())
+        is_palindrome = value.lower() == value.lower()[::-1]
 
-        if "is_palindrome" in parsed and props["is_palindrome"] != parsed["is_palindrome"]:
-            continue
-        if "word_count" in parsed and props["word_count"] != parsed["word_count"]:
-            continue
-        if "min_length" in parsed and props["length"] < parsed["min_length"]:
-            continue
-        if "contains_character" in parsed and parsed["contains_character"].lower() not in item["value"].lower():
-            continue
+        match = True
 
-        filtered.append(item)
+        # Apply filters
+        if 'is_palindrome' in parsed_filters and parsed_filters['is_palindrome'] != is_palindrome:
+            match = False
 
-    if not filtered:
-        raise NotFoundException("No String matches this queries in the system.")
+        if 'min_length' in parsed_filters and length < parsed_filters['min_length']:
+            match = False
+
+        if 'max_length' in parsed_filters and length > parsed_filters['max_length']:
+            match = False
+
+        if 'word_count' in parsed_filters and word_count != parsed_filters['word_count']:
+            match = False
+
+        if 'contains_character' in parsed_filters and parsed_filters['contains_character'] not in value.lower():
+            match = False
+
+        if match:
+            filtered_results.append(item)
 
     response = {
-        "data": filtered,
-        "count": len(filtered),
+        "data": filtered_results,
+        "count": len(filtered_results),
         "interpreted_query": {
-            "original": query,
-            "parsed_filters": parsed
+            "original_query": query,
+            "parsed_filters": parsed_filters
         }
     }
-    return JSONResponse(content=response, status_code=200, media_type="application/json")
 
+    return JSONResponse(status_code=200, content=response)
