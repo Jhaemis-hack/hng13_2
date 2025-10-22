@@ -150,13 +150,10 @@ async def analyze_string(request: Request, body: Value):
         duplicate_count = provided_string_char_collection.count(letter)
         char_freq[letter] = duplicate_count
 
-    unique_char = 0
-    for char in provided_string_char_collection:
-        if provided_string_char_collection.count(char) == 1:
-            unique_char += 1
+    # reversed_char_string = reversed_string(provided_string)
+    # palindrome = reversed_char_string == provided_string
 
-    reversed_char_string = reversed_string(provided_string)
-    palindrome = reversed_char_string == provided_string
+    palindrome = provided_string.lower().replace(" ", "") == reversed_string(provided_string.lower().replace(" ", ""))
 
     data = {
         "id": hashed_string,
@@ -164,8 +161,8 @@ async def analyze_string(request: Request, body: Value):
         "properties": {
             "length": len(provided_string_char_collection),
             "is_palindrome": palindrome,
-            "unique_characters": unique_char,
-            "word_count": len(provided_string.split(" ")),
+            "unique_characters": len(set(provided_string_char_collection)),
+            "word_count": len(provided_string.split()),
             "sha256_hash": hashed_string,
             "character_frequency_map": char_freq,
         },
@@ -210,44 +207,55 @@ async def fetch_string(request: Request, string_value: str):
 @app.get("/strings")
 async def filter_string(
     request: Request,
-    is_palindrome: bool = Query(..., description="is palindrome cannot be empty"),
-    min_length: int = Query(..., description="min length cannot be empty"),
-    max_length: int = Query(..., description="max length cannot be empty"),
-    word_count: int = Query(..., description="word count cannot be empty"),
-    contains_character: str = Query(..., description="contains character cannot be empty"),
+    is_palindrome: bool = Query(..., description="Whether the string is a palindrome"),
+    min_length: int = Query(..., description="Minimum string length"),
+    max_length: int = Query(..., description="Maximum string length"),
+    word_count: int = Query(..., description="Exact word count"),
+    contains_character: str = Query(..., min_length=1, description="Character that must appear in the string")
 ):
+    if len(contains_character) > 1:
+        raise BadRequestException("contains_character must be a single character.")
+
+    search_char = contains_character.lower()
+    filtered_strings = []
+
     try:
-        palindrome = str(is_palindrome).lower() in ["true", "1", "yes"]
-        search_char = contains_character.lower()
-        filtered_strings = []
+        for index_item in StringDB:
+            props = index_item["properties"]
 
-        for item in StringDB:
-            props = item["properties"]
-            if (
-                props["is_palindrome"] == palindrome
-                and min_length <= props["length"] <= max_length
-                and props["word_count"] == word_count
-                and search_char in item["value"].lower()
-            ):
-                filtered_strings.append(item)
+            if props["is_palindrome"] != is_palindrome:
+                continue
 
-        data = {
-            "data": filtered_strings,
-            "count": len(filtered_strings),
-            "filters_applied": {
-                "is_palindrome": palindrome,
-                "min_length": min_length,
-                "max_length": max_length,
-                "word_count": word_count,
-                "contains_character": contains_character
-            }
+            if not (min_length <= props["length"] <= max_length):
+                continue
+
+            if props["word_count"] != word_count:
+                continue
+
+            if search_char not in index_item["value"].lower():
+                continue
+
+            filtered_strings.append(index_item)
+
+    except Exception as e:
+        raise BadRequestException(f"Invalid query parameters: {str(e)}")
+
+    if not filtered_strings:
+        raise NotFoundException("No String matches this query in the system.")
+
+    response_data = {
+        "data": filtered_strings,
+        "count": len(filtered_strings),
+        "filters_applied": {
+            "is_palindrome": is_palindrome,
+            "min_length": min_length,
+            "max_length": max_length,
+            "word_count": word_count,
+            "contains_character": contains_character
         }
+    }
 
-        return JSONResponse(content=data, status_code=200, media_type="application/json")
-
-    except Exception:
-        raise BadRequestException("Invalid query parameter values or types")
-
+    return JSONResponse(content=response_data, status_code=200, media_type="application/json")
 
 
 @app.delete("/strings/{string_value}")
@@ -255,55 +263,80 @@ async def delete_string(request: Request, string_value: str):
     provided_string = string_value
     data = None
 
-    # Find the matching string
     for item in StringDB:
         if item['value'] == provided_string:
             data = item
             break
 
-    # If not found, raise a clean custom error
     if data is None:
         raise NotFoundException("String does not exist in the system.")
 
-    # Remove it safely
     StringDB.remove(data)
 
-    # Return proper HTTP 204 (no body)
     return Response(status_code=204)
 
 
 @limiter.limit("8/minute")
-@app.get("/string/filter-by-natural-language")
-async def filter_by_natural_language(request: Request,
-                                     query: str = Query(..., description="Your search term")
-                                     ):
-    query_str = query
-    natural_language = query_str.replace("%20", " ")
+@app.get("/strings/filter-by-natural-language")
+async def filter_by_natural_language(
+    request: Request,
+    query: str = Query(..., description="A natural language filter query")
+):
+    query_lower = query.lower()
+    parsed_filters = {}
 
-    nl = natural_language.lower()
-    parsed = {}
-    if "single word" in nl or "single-word" in nl:
-        parsed["word_count"] = 1
-    if "palindrom" in nl:
-        parsed["is_palindrome"] = True
+    if "palindromic" in query_lower:
+        parsed_filters["is_palindrome"] = True
 
+    if "single word" in query_lower or "one word" in query_lower:
+        parsed_filters["word_count"] = 1
+
+    if "longer than" in query_lower:
+        try:
+            num = int(''.join([ch for ch in query_lower.split("longer than")[-1] if ch.isdigit()]))
+            parsed_filters["min_length"] = num + 1
+        except ValueError:
+            raise BadRequestException("Unable to parse numeric value from query.")
+
+    if "containing the letter" in query_lower:
+        try:
+            letter = query_lower.split("containing the letter")[-1].strip()[0]
+            parsed_filters["contains_character"] = letter
+        except Exception:
+            raise BadRequestException("Unable to parse character from query.")
+
+    if not parsed_filters:
+        raise BadRequestException("Unable to parse natural language query.")
+
+    # Apply filters
     filtered_strings = []
-    for string in range(len(StringDB)):
-        index_item = StringDB[string]
-        if index_item['properties']['is_palindrome']:
-            if index_item['properties']['word_count'] == 1:
-                index_value = index_item['value']
-                filtered_strings.append(index_value)
+    for index_item in StringDB:
+        props = index_item["properties"]
 
-    if len(filtered_strings) == 0:
-        raise NotFoundException("No String matches this queries in the system.")
+        if "is_palindrome" in parsed_filters and props["is_palindrome"] != parsed_filters["is_palindrome"]:
+            continue
+
+        if "word_count" in parsed_filters and props["word_count"] != parsed_filters["word_count"]:
+            continue
+
+        if "min_length" in parsed_filters and props["length"] < parsed_filters["min_length"]:
+            continue
+
+        if "contains_character" in parsed_filters and parsed_filters["contains_character"].lower() not in index_item["value"].lower():
+            continue
+
+        filtered_strings.append(index_item)
+
+    if not filtered_strings:
+        raise NotFoundException("No String matches this query in the system.")
 
     data = {
         "data": filtered_strings,
         "count": len(filtered_strings),
         "interpreted_query": {
-            "original": natural_language,
-            "parsed_filters": parsed
+            "original": query,
+            "parsed_filters": parsed_filters
         }
     }
-    return JSONResponse(content=data, status_code=200, media_type="application/json")
+    return JSONResponse(content=data, status_code=200)
+
