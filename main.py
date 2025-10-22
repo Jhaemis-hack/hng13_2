@@ -414,7 +414,7 @@ async def delete_string(request: Request, string_value: str):
 
 
 
-def parse_natural_language_query(query_string: str) -> Dict[str, Any]:
+def parse_natural_language_query(request: Request, query_string: str) -> Dict[str, Any]:
 
     filters = {}
     query_lower = query_string.lower()
@@ -453,7 +453,7 @@ def parse_natural_language_query(query_string: str) -> Dict[str, Any]:
 
 @limiter.limit("8/minute")
 @app.get("/strings/filter-by-natural-language")
-def filter_by_natural_language(query: str = Query(..., description="Natural language filter query")):
+def filter_by_natural_language(request: Request,query: str = Query(..., description="Natural language filter query")):
     """
     GET /strings/filter-by-natural-language
 
