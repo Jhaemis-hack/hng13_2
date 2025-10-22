@@ -203,49 +203,54 @@ async def fetch_string(request: Request, string_value: str):
     return JSONResponse(content=data, status_code=200, media_type="application/json")
 
 
+from fastapi import Query
+
 @limiter.limit("8/minute")
 @app.get("/strings")
 async def filter_string(
     request: Request,
-    is_palindrome: bool = Query(..., description="Whether the string is a palindrome"),
-    min_length: int = Query(..., description="Minimum string length"),
-    max_length: int = Query(..., description="Maximum string length"),
+    is_palindrome: bool = Query(..., description="is_palindrome (true/false)"),
+    min_length: int = Query(..., description="Minimum string length (inclusive)"),
+    max_length: int = Query(..., description="Maximum string length (inclusive)"),
     word_count: int = Query(..., description="Exact word count"),
-    contains_character: str = Query(..., min_length=1, description="Character that must appear in the string")
+    contains_character: str = Query(..., min_length=1, description="A single character to search for"),
 ):
-    if len(contains_character) > 1:
+    # Validate contains_character length
+    if len(contains_character) != 1:
         raise BadRequestException("contains_character must be a single character.")
 
+    # Normalize search char for case-insensitive check
     search_char = contains_character.lower()
-    filtered_strings = []
 
-    try:
-        for index_item in StringDB:
-            props = index_item["properties"]
+    # Validate min/max semantics
+    if min_length < 0 or max_length < 0:
+        raise BadRequestException("min_length and max_length must be non-negative integers.")
+    if min_length > max_length:
+        raise BadRequestException("min_length cannot be greater than max_length.")
 
-            if props["is_palindrome"] != is_palindrome:
-                continue
+    filtered = []
+    for item in StringDB:
+        props = item["properties"]
 
-            if not (min_length <= props["length"] <= max_length):
-                continue
+        # inclusive length check
+        length_ok = (min_length <= props["length"] <= max_length)
+        if props["is_palindrome"] != is_palindrome or not length_ok:
+            continue
 
-            if props["word_count"] != word_count:
-                continue
+        # exact word count
+        if props["word_count"] != word_count:
+            continue
 
-            if search_char not in index_item["value"].lower():
-                continue
+        # contains_character case-insensitive
+        if search_char not in item["value"].lower():
+            continue
 
-            filtered_strings.append(index_item)
+        filtered.append(item)
 
-    except Exception as e:
-        raise BadRequestException(f"Invalid query parameters: {str(e)}")
-
-    if not filtered_strings:
-        raise NotFoundException("No String matches this query in the system.")
-
-    response_data = {
-        "data": filtered_strings,
-        "count": len(filtered_strings),
+    # return consistent response shape even when empty
+    response = {
+        "data": filtered,
+        "count": len(filtered),
         "filters_applied": {
             "is_palindrome": is_palindrome,
             "min_length": min_length,
@@ -254,8 +259,8 @@ async def filter_string(
             "contains_character": contains_character
         }
     }
+    return JSONResponse(content=response, status_code=200, media_type="application/json")
 
-    return JSONResponse(content=response_data, status_code=200, media_type="application/json")
 
 
 @app.delete("/strings/{string_value}")
@@ -275,68 +280,76 @@ async def delete_string(request: Request, string_value: str):
 
     return Response(status_code=204)
 
-
 @limiter.limit("8/minute")
 @app.get("/strings/filter-by-natural-language")
 async def filter_by_natural_language(
     request: Request,
     query: str = Query(..., description="A natural language filter query")
 ):
-    query_lower = query.lower()
-    parsed_filters = {}
+    q = query.lower().strip()
+    parsed = {}
 
-    if "palindromic" in query_lower:
-        parsed_filters["is_palindrome"] = True
+    if "palindrom" in q:
+        parsed["is_palindrome"] = True
 
-    if "single word" in query_lower or "one word" in query_lower:
-        parsed_filters["word_count"] = 1
+    if "single word" in q or "one word" in q or "single-word" in q:
+        parsed["word_count"] = 1
 
-    if "longer than" in query_lower:
+    if "longer than" in q:
         try:
-            num = int(''.join([ch for ch in query_lower.split("longer than")[-1] if ch.isdigit()]))
-            parsed_filters["min_length"] = num + 1
-        except ValueError:
-            raise BadRequestException("Unable to parse numeric value from query.")
-
-    if "containing the letter" in query_lower:
-        try:
-            letter = query_lower.split("containing the letter")[-1].strip()[0]
-            parsed_filters["contains_character"] = letter
+            tail = q.split("longer than", 1)[1]
+            num = int("".join(ch for ch in tail if ch.isdigit()))
+            parsed["min_length"] = num + 1
         except Exception:
-            raise BadRequestException("Unable to parse character from query.")
+            raise BadRequestException("Unable to parse numeric length from query.")
 
-    if not parsed_filters:
-        raise BadRequestException("Unable to parse natural language query.")
+    if "containing the letter" in q:
+        try:
+            tail = q.split("containing the letter", 1)[1].strip()
+            if not tail:
+                raise ValueError
+            parsed["contains_character"] = tail[0]
+        except Exception:
+            raise BadRequestException("Unable to parse letter from query.")
 
-    # Apply filters
-    filtered_strings = []
-    for index_item in StringDB:
-        props = index_item["properties"]
 
-        if "is_palindrome" in parsed_filters and props["is_palindrome"] != parsed_filters["is_palindrome"]:
+    if "containing " in q and "containing the letter" not in q:
+        # crude attempt to get single char after 'containing '
+        try:
+            tail = q.split("containing", 1)[1].strip()
+            # pick first token's first char
+            parsed["contains_character"] = tail.split()[0][0]
+        except Exception:
+            pass
+
+    if not parsed:
+        raise BadRequestException("Unable to parse natural language query")
+
+    filtered = []
+    for item in StringDB:
+        props = item["properties"]
+
+        if "is_palindrome" in parsed and props["is_palindrome"] != parsed["is_palindrome"]:
+            continue
+        if "word_count" in parsed and props["word_count"] != parsed["word_count"]:
+            continue
+        if "min_length" in parsed and props["length"] < parsed["min_length"]:
+            continue
+        if "contains_character" in parsed and parsed["contains_character"].lower() not in item["value"].lower():
             continue
 
-        if "word_count" in parsed_filters and props["word_count"] != parsed_filters["word_count"]:
-            continue
+        filtered.append(item)
 
-        if "min_length" in parsed_filters and props["length"] < parsed_filters["min_length"]:
-            continue
+    if not filtered:
+        raise NotFoundException("No String matches this queries in the system.")
 
-        if "contains_character" in parsed_filters and parsed_filters["contains_character"].lower() not in index_item["value"].lower():
-            continue
-
-        filtered_strings.append(index_item)
-
-    if not filtered_strings:
-        raise NotFoundException("No String matches this query in the system.")
-
-    data = {
-        "data": filtered_strings,
-        "count": len(filtered_strings),
+    response = {
+        "data": filtered,
+        "count": len(filtered),
         "interpreted_query": {
             "original": query,
-            "parsed_filters": parsed_filters
+            "parsed_filters": parsed
         }
     }
-    return JSONResponse(content=data, status_code=200)
+    return JSONResponse(content=response, status_code=200, media_type="application/json")
 
