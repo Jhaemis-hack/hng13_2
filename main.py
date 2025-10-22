@@ -1,5 +1,7 @@
-from wsgiref.validate import assert_
-
+import re
+from collections import Counter
+import hashlib
+from datetime import datetime, timezone
 from fastapi import FastAPI, Request, Response, Depends, Query
 from datetime import datetime, timezone
 from fastapi.responses import JSONResponse
@@ -129,48 +131,105 @@ def reversed_string(string: str):
     return rev_string
 
 
+
+def get_string_hash(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+def normalize_for_palindrome(s: str) -> str:
+    # remove non-alphanumeric and lowercase
+    return re.sub(r'[^0-9a-zA-Z]', '', s).lower()
+
+def compute_string_properties(value: str) -> dict:
+    length = len(value)
+
+    word_count = len([w for w in value.split() if w])
+
+    no_space = value.replace(" ", "")
+
+    char_freq = dict(Counter(no_space))
+
+    unique_characters = len(set(no_space))
+
+    normalized = normalize_for_palindrome(value)
+    is_palindrome = normalized == normalized[::-1] and len(normalized) > 0
+
+    sha256_hash = get_string_hash(value)
+
+    return {
+        "length": length,
+        "is_palindrome": is_palindrome,
+        "unique_characters": unique_characters,
+        "word_count": word_count,
+        "sha256_hash": sha256_hash,
+        "character_frequency_map": char_freq
+    }
+
+#
+# @limiter.limit("8/minute")
+# @app.post("/strings")
+# async def analyze_string(request: Request, body: Value):
+#     provided_string = body.value
+#
+#     for string in range(len(StringDB)):
+#         index_item = StringDB[string]
+#         if index_item['value'] == provided_string:
+#             raise ConflictException("String already exists in the system")
+#
+#     hashed_string = get_string_hash(provided_string)
+#     no_space_string = provided_string.replace(" ", "")
+#     provided_string_char_collection: list[Any] = []
+#     for char in no_space_string:
+#         provided_string_char_collection.append(char)
+#
+#     char_freq: dict[str, int] = {}
+#     for letter in provided_string_char_collection:
+#         duplicate_count = provided_string_char_collection.count(letter)
+#         char_freq[letter] = duplicate_count
+#
+#     # reversed_char_string = reversed_string(provided_string)
+#     # palindrome = reversed_char_string == provided_string
+#
+#     palindrome = provided_string.lower().replace(" ", "") == reversed_string(provided_string.lower().replace(" ", ""))
+#
+#     data = {
+#         "id": hashed_string,
+#         "value": provided_string,
+#         "properties": {
+#             "length": len(provided_string_char_collection),
+#             "is_palindrome": palindrome,
+#             "unique_characters": len(set(provided_string_char_collection)),
+#             "word_count": len(provided_string.split()),
+#             "sha256_hash": hashed_string,
+#             "character_frequency_map": char_freq,
+#         },
+#         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+#     }
+#     StringDB.append(data)
+#     return JSONResponse(content=data, status_code=201, media_type="application/json")
+
 @limiter.limit("8/minute")
 @app.post("/strings")
 async def analyze_string(request: Request, body: Value):
     provided_string = body.value
 
-    for string in range(len(StringDB)):
-        index_item = StringDB[string]
-        if index_item['value'] == provided_string:
+    # Duplicate check: exact match (case-sensitive). Change to .lower() for case-insensitive uniqueness if desired.
+    for item in StringDB:
+        if item["value"] == provided_string:
             raise ConflictException("String already exists in the system")
 
-    hashed_string = get_string_hash(provided_string)
-    no_space_string = provided_string.replace(" ", "")
-    provided_string_char_collection: list[Any] = []
-    for char in no_space_string:
-        provided_string_char_collection.append(char)
-
-    char_freq: dict[str, int] = {}
-    for letter in provided_string_char_collection:
-        duplicate_count = provided_string_char_collection.count(letter)
-        char_freq[letter] = duplicate_count
-
-    # reversed_char_string = reversed_string(provided_string)
-    # palindrome = reversed_char_string == provided_string
-
-    palindrome = provided_string.lower().replace(" ", "") == reversed_string(provided_string.lower().replace(" ", ""))
+    props = compute_string_properties(provided_string)
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     data = {
-        "id": hashed_string,
+        "id": props["sha256_hash"],
         "value": provided_string,
-        "properties": {
-            "length": len(provided_string_char_collection),
-            "is_palindrome": palindrome,
-            "unique_characters": len(set(provided_string_char_collection)),
-            "word_count": len(provided_string.split()),
-            "sha256_hash": hashed_string,
-            "character_frequency_map": char_freq,
-        },
-        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "properties": props,
+        "created_at": now_iso
     }
-    StringDB.append(data)
-    return JSONResponse(content=data, status_code=201, media_type="application/json")
 
+    StringDB.append(data)
+
+    return JSONResponse(content=data, status_code=201, media_type="application/json")
 
 @limiter.limit("8/minute")
 @app.get("/all")
