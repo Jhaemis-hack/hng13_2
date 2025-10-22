@@ -17,8 +17,8 @@ from functools import lru_cache
 from typing_extensions import Annotated
 from core import config
 from contextlib import asynccontextmanager
-from pydantic import BaseModel, Field, Optional
-from typing import Dict, List, Any
+from pydantic import BaseModel, Field
+from typing import Dict, List, Any, Optional
 import hashlib
 
 
@@ -223,9 +223,8 @@ async def fetch_string(request: Request, string_value: str):
 from fastapi import Query
 
 @limiter.limit("8/minute")
-
 @app.get("/strings")
-async def filter_strings(
+async def filter_strings(request: Request,
     is_palindrome: Optional[bool] = Query(None, description="Optional palindrome filter"),
     min_length: Optional[int] = Query(None, description="Minimum string length"),
     max_length: Optional[int] = Query(None, description="Maximum string length"),
