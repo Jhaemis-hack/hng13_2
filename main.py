@@ -414,7 +414,7 @@ async def delete_string(request: Request, string_value: str):
 
 
 
-def parse_natural_language_query(request: Request, query_string: str) -> Dict[str, Any]:
+def parse_natural_language_query(query_string: str) -> Dict[str, Any]:
 
     filters = {}
     query_lower = query_string.lower()
@@ -451,15 +451,10 @@ def parse_natural_language_query(request: Request, query_string: str) -> Dict[st
     return filters
 
 
-@limiter.limit("8/minute")
+@limiter.limit("12/minute")
 @app.get("/strings/filter-by-natural-language")
-def filter_by_natural_language(request: Request,query: str = Query(..., description="Natural language filter query")):
-    """
-    GET /strings/filter-by-natural-language
+def filter_by_natural_language(request: Request, query: str = Query(..., description="Natural language filter query")):
 
-    Parses a natural language query (e.g., "all single word palindromic strings")
-    into filters, applies them to StringDB, and returns matching results.
-    """
     if not query:
         raise BadRequestException("The 'query' parameter is required.")
 
