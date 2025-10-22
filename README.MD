@@ -1,163 +1,199 @@
-# My Profile API
+# String Analysis API
 
-A **FastAPI-based web application** that serves my profile details, health checks, and an external cat fact using rate limiting and proper exception handling. It demonstrates clean API structure, modular configuration, and integration with external services.
-
----
-
-## Project Overview
-
-This API provides the following routes:
-
-| Endpoint | Method | Description |
-|-----------|--------|--------------|
-| `/` | GET | Welcome route |
-| `/health` | GET | Health check endpoint |
-| `/me` | GET | Returns profile details and a random cat fact |
+A **FastAPI**-powered RESTful service that allows users to submit, analyze, retrieve, and manage strings with rich metadata, such as SHA256 hashes, palindrome detection, word count, and character frequency mapping.
 
 ---
 
 ## Features
 
-- **FastAPI** for modern async web framework performance.
-- **SlowAPI** for rate limiting.
-- **CORS middleware** for cross-origin requests.
-- **Config management** using Pydantic settings.
-- **Custom error handling** through reusable error handler modules.
-- **Asynchronous HTTP client integration.**
+- **Store and Retrieve Strings:** Save unique strings and retrieve their computed properties.  
+- **String Properties:** Automatically calculates length, palindrome status, word count, character frequency, and SHA256 hash.  
+- **Filtering:** Filter stored strings based on multiple criteria such as length, palindrome status, character inclusion, etc.  
+- **Rate Limiting:** Protects routes using `slowapi` to prevent abuse (default: 8 requests per minute).  
+- **Custom Exceptions:** Includes clean and descriptive error messages with proper status codes.  
+- **In-Memory Database:** Uses a simple Python list (`StringDB`) to simulate a temporary database.  
 
 ---
 
-## Project Structure
+## Tech Stack
 
-```
-hng13_1/
-│
-├── core/
-│   ├── __init__.py
-│   ├── config.py
-│   ├── error_handlers.py
-│   ├── exceptions.py
-│
-├── services/
-│   ├── __init__.py
-│   ├── http_client.py
-│
-├── main.py
-├── test_main.py
-├── requirements.txt
-└── README.md
-```
+| Layer | Technology |
+|--------|-------------|
+| Backend Framework | FastAPI |
+| Rate Limiting | slowapi |
+| Security | helmet, CORS |
+| HTTP Server | Uvicorn |
+| Data Handling | Pydantic Models |
 
 ---
 
-## Installation Guide
+##  Installation and Setup
 
-### Clone the Repository
+### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/hng13_1.git
-cd hng13_1
+git clone https://github.com/your-username/string-analysis-api.git
+cd string-analysis-api
 ```
 
-### Create a Virtual Environment
+### 2. Create a Virtual Environment
 
 ```bash
-python -m venv .ve
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-Activate it:
-
-**Windows**
-```bash
-.ve\Scripts\activate
-```
-
-**Mac/Linux**
-```bash
-source .ve/bin/activate
-```
-
-### Install Dependencies
+### 3. Install Dependencies
 
 ```bash
-pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Ensure your `requirements.txt` includes:
-
+Example `requirements.txt` content:
 ```
 fastapi
-uvicorn[standard]
+uvicorn
 slowapi
-pydantic_settings
-httpx[h2]
+pydantic
+python-dotenv
 ```
 
----
-
-## Running the Application Locally
-
-Once installed, run the app using:
+### 4. Run the Server
 
 ```bash
-uvicorn main:app --reload
+uvicorn main:app --reload --port 8080
 ```
 
-The server starts at:
-👉 http://127.0.0.1:8000
+Your API will be live at:
+```
+http://127.0.0.1:8080
+```
 
 ---
 
-## API Endpoints Overview
+## API Documentation
 
-| Endpoint | Description | Example |
-|-----------|--------------|----------|
-| `/` | Welcome message | GET `/` |
-| `/health` | Health status | GET `/health` |
-| `/me` | Profile + random cat fact | GET `/me` |
+FastAPI automatically generates documentation for you:
+
+- **Swagger UI:** [http://127.0.0.1:8080/docs](http://127.0.0.1:8080/docs)
+- **ReDoc:** [http://127.0.0.1:8080/redoc](http://127.0.0.1:8080/redoc)
 
 ---
 
-## Example Response
+## Endpoints Overview
 
-**GET `/me`**
+### 1. **POST /strings**
+Store a new string and compute its metadata.
 
+#### Example Request
 ```json
 {
-  "status": "success",
-  "user": {
-    "email": "gbemilekekenny@gmail.com",
-    "name": "James Kehinde",
-    "stack": "NodeJs"
+  "value": "boob"
+}
+```
+
+#### Example Response
+```json
+{
+  "id": "e99d55248f67be7623332be8dabcd143ce2495eb923860b4ed0d963621ece901",
+  "value": "boob",
+  "properties": {
+    "length": 4,
+    "is_palindrome": true,
+    "unique_characters": 0,
+    "word_count": 4,
+    "sha256_hash": "e99d55248f67be7623332be8dabcd143ce2495eb923860b4ed0d963621ece901",
+    "character_frequency_map": {
+      "b": 2,
+      "o": 2
+    }
   },
-  "timestamp": "2025-10-17T23:30:15Z",
-  "fact": "Cats sleep for around 13 to 16 hours a day."
+  "created_at": "2025-10-22T18:12:30.354308Z"
 }
 ```
 
 ---
 
-## Deployment Notes
+### 2. **GET /strings**
+Filter stored strings based on query parameters.
 
-If deploying (e.g. Render, Railway, etc.), ensure your **Start Command** is:
-
-```bash
-uvicorn main:app --host 0.0.0.0 --port 8000
+#### Example Query
+```
+/strings?is_palindrome=true&min_length=2&max_length=6&word_count=5&contains_character=b
 ```
 
-And **Python version** is `>=3.12`.
+#### Example Response
+```json
+{
+  "data": [
+    {
+      "id": "e99d55248f67be7623332be8dabcd143ce2495eb923860b4ed0d963621ece901",
+      "value": "boob",
+      "properties": {
+        "length": 4,
+        "is_palindrome": true,
+        "unique_characters": 0,
+        "word_count": 4,
+        "sha256_hash": "e99d55248f67be7623332be8dabcd143ce2495eb923860b4ed0d963621ece901",
+        "character_frequency_map": {
+          "b": 2,
+          "o": 2
+        }
+      },
+      "created_at": "2025-10-22T18:12:30.354308Z"
+    }
+  ],
+  "count": 1,
+  "filters_applied": {
+    "is_palindrome": true,
+    "min_length": 2,
+    "max_length": 6,
+    "word_count": 5,
+    "contains_character": "b"
+  }
+}
+```
+
+---
+
+### 3. **DELETE /strings/{string_value}**
+Deletes a string entry if it exists.
+
+#### Example
+```
+DELETE /strings/boob
+```
+
+#### Response
+```
+204 No Content
+```
+
+---
+
+##  Error Handling
+
+The API uses a consistent error response model for validation and runtime errors.
+
+| Error | HTTP Code | Description |
+|--------|------------|-------------|
+| `NotFoundException` | 404 | When the string or query result is not found |
+| `ValidationError` | 400 | When a required field is missing or invalid |
+| `RateLimitExceeded` | 429 | When request frequency exceeds allowed limit |
+
+---
+
+## Notes
+
+- This project uses **in-memory storage**, meaning all data resets when the server restarts.
+- You can extend this API by integrating a database like **MongoDB** or **PostgreSQL**.
+- Modify the `StringDB` list to connect with your preferred data persistence layer.
 
 ---
 
 ## Author
 
 **James Kehinde**  
-Email: gbemilekekenny@gmail.com  
-Stack: NodeJS / Full Stack Developer
+Built with ❤️ using FastAPI  
+[GitHub](https://github.com/your-username)
 
----
-
-## License
-
-This project is licensed under the MIT License.
